@@ -15,7 +15,21 @@ def setup_scene(size_x=5, size_y=5, size_z=4):
         getattr(bpy.ops.mesh, primitive)(location=pos)
         obj = bpy.context.object
         obj.pass_index = _ + 1  # 设置ID通道
-        
+
+        # 为每个物体新建材质并赋予随机颜色（优化为渲染消耗最小的材质）
+        mat = bpy.data.materials.new(name=f"Material_{_}")
+        mat.use_nodes = False  # 禁用节点以减少渲染消耗
+        mat.diffuse_color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
+        obj.data.materials.append(mat)
+
+        ## TODO:支持节点材质，BSDF颜色输入
+        # mat = bpy.data.materials.new(name=f"Material_{_}")
+        # mat.use_nodes = True
+        # bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        # if bsdf:
+        #     bsdf.inputs["Base Color"].default_value = (random.random(), random.random(), random.random(), 1)  # 随机颜色
+        # obj.data.materials.append(mat)
+
     # 添加太阳光
     bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
     light = bpy.context.object
