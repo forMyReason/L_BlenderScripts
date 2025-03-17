@@ -143,6 +143,7 @@ def set_animation(obj, start=1, end=250):
             obj.keyframe_insert("rotation_euler", frame=frame)
             print(f"已为 {obj.name} 创建 {obj.animation_data.action.frame_range} 帧动画")
 
+##### 原始代码 #####
 # def setup_render(engine='CYCLES'):
 #     scene = bpy.context.scene
 #     scene.render.engine = engine
@@ -179,6 +180,126 @@ def set_animation(obj, start=1, end=250):
     
 #     scene.camera = original_camera
 
+### 优化后的代码 ###
+def setup_render(engine='CYCLES'):
+    scene = bpy.context.scene
+    scene.render.engine = engine
+    scene.render.resolution_x = 960
+    scene.render.resolution_y = 540
+    scene.render.image_settings.file_format = 'OPEN_EXR'
+    scene.render.image_settings.color_depth = '32'
+    scene.render.use_motion_blur = False
+    
+    vl = scene.view_layers["ViewLayer"]
+    
+    # 启用基础通道
+    vl.use_pass_combined = True       # RGB
+    vl.use_pass_z = True              # Z-depth（垂直距离）
+    vl.use_pass_object_index = True   # ID
+    
+    # 添加自定义AOV通道
+    def ensure_aov(layer, name, type='VALUE'):
+        if name not in layer.aovs:
+            aov = layer.aovs.add()
+            aov.name = name
+            aov.type = type
+    
+    # 创建两个自定义AOV
+    ensure_aov(vl, 'CameraDistance')      # 摄像机距离
+    ensure_aov(vl, 'VerticalDistance')    # 垂直平面距离
+    
+    # 配置节点系统
+    if not scene.node_tree:
+        scene.use_nodes = True
+    
+    nodes = scene.node_tree.nodes
+    links = scene.node_tree.links
+    
+    # 清空现有节点
+    nodes.clear()
+    
+    # 创建必要节点
+    rl_node = nodes.new('CompositorNodeRLayers')
+    output_node = nodes.new('CompositorNodeComposite')
+    
+    # 连接所有通道
+    links.new(rl_node.outputs["Image"], output_node.inputs["Image"])
+    links.new(rl_node.outputs["Depth"], output_node.inputs["Depth"])
+    links.new(rl_node.outputs["CameraDistance"], output_node.inputs[2])  # EXR第4通道
+    links.new(rl_node.outputs["VerticalDistance"], output_node.inputs[3]) # EXR第5通道
+    
+    # 引擎特定设置
+    if engine == 'CYCLES':
+        scene.cycles.samples = 64
+        scene.cycles.use_denoise = True
+        
+        # 为所有物体创建距离计算材质
+        if not bpy.data.materials.get("DistanceMaterial"):
+            mat = bpy.data.materials.new("DistanceMaterial")
+            mat.use_nodes = True
+            nodes = mat.node_tree.nodes
+            nodes.clear()
+            
+            # 创建节点网络
+            geo = nodes.new('ShaderNodeNewGeometry')
+            camera = nodes.new('ShaderNodeCameraData')
+            math_sub = nodes.new('ShaderNodeVectorMath')
+            math_sub.operation = 'SUBTRACT'
+            math_len = nodes.new('ShaderNodeVectorMath')
+            math_len.operation = 'LENGTH'
+            aov_out = nodes.new('ShaderNodeOutputAOV')
+            aov_out.name = 'CameraDistance'
+            
+            # 连接节点
+            links = mat.node_tree.links
+            links.new(camera.outputs["View Z"], math_sub.inputs[0])
+            links.new(geo.outputs["Position"], math_sub.inputs[1])
+            links.new(math_sub.outputs["Vector"], math_len.inputs[0])
+            links.new(math_len.outputs["Value"], aov_out.inputs["Value"])
+            
+        # 应用材质到所有物体
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH':
+                if not obj.data.materials:
+                    obj.data.materials.append(bpy.data.materials["DistanceMaterial"])
+                
+    else:  # EEVEE配置
+        scene.eevee.taa_render_samples = 64
+        # 启用必要通道
+        vl.use_pass_uv = True
+        vl.use_pass_vector = True
+        
+        # 设置距离映射
+        scene.eevee.use_ssr = True
+        scene.eevee.use_gtao = True
+
+# 在渲染后添加元数据记录
+def render_cameras(cameras, frame_start=1, frame_end=20):
+    original_camera = bpy.context.scene.camera
+    scene = bpy.context.scene
+    
+    # 设置渲染的帧范围
+    scene.frame_start = frame_start
+    scene.frame_end = frame_end
+    
+    for cam in cameras:
+        scene.camera = cam
+        scene.render.filepath = f"//renders/{cam.name}/frame_"
+        
+        # 写入摄像机参数元数据
+        exr_header = {
+            'CameraLocation': str(cam.location),
+            'CameraRotation': str(cam.rotation_euler),
+            'FocalLength': str(cam.data.lens)
+        }
+        scene.render.image_settings.exr_codec = 'ZIP'
+        scene.render.image_settings.use_zbuffer = True
+        
+        print(f"Rendering with camera: {cam.name}")
+        bpy.ops.render.render(animation=True)
+    
+    scene.camera = original_camera
+
 # 执行主程序
 clear_scene()
 setup_scene()
@@ -193,10 +314,10 @@ for obj in bpy.data.objects:
 for cam in cameras:
     set_animation(cam)
 
-# # 渲染设置
-# setup_render(engine='CYCLES')  # 切换为'BLENDER_EEVEE'使用EEVEE
+# 渲染设置
+setup_render(engine='CYCLES')  # 切换为'BLENDER_EEVEE'使用EEVEE
 
-# # 开始渲染
-# render_cameras(cameras)
+# 开始渲染
+render_cameras(cameras)
 
-# print("所有渲染任务完成！")
+print("所有渲染任务完成！")
