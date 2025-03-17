@@ -3,23 +3,31 @@ import math
 import random
 from mathutils import Vector, Euler
 
+# 共生成多少个物体
+num = 8
+
 def clear_scene():
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
 
 def setup_scene(size_x=5, size_y=5, size_z=4):
     primitives = ['primitive_cube_add', 'primitive_uv_sphere_add', 'primitive_cone_add', 'primitive_torus_add', 'primitive_monkey_add', 'primitive_cylinder_add']
-    for _ in range(8):
+    global num
+    for _ in range(num):
         pos = (random.uniform(-size_x * 0.5 , size_x * 0.5), random.uniform(-0.5 * size_y, size_y * 0.5), random.uniform(0, size_z))
         primitive = random.choice(primitives)
         getattr(bpy.ops.mesh, primitive)(location=pos)
         obj = bpy.context.object
-        obj.pass_index = _ + 1  # 设置ID通道
+        # obj.pass_index = _ + 1  # 设置ID通道
+        obj.pass_index = random.randint(1, 100)
 
-        # 为每个物体新建材质并赋予随机颜色（优化为渲染消耗最小的材质）
-        mat = bpy.data.materials.new(name=f"Material_{_}")
-        mat.use_nodes = False  # 禁用节点以减少渲染消耗
-        mat.diffuse_color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
+        # 检查是否已有相同名称的材质，避免重复创建
+        mat_name = f"Material_{_}"
+        mat = bpy.data.materials.get(mat_name)
+        if not mat:
+            mat = bpy.data.materials.new(name=mat_name)
+            mat.use_nodes = False  # 禁用节点以减少渲染消耗
+            mat.diffuse_color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
         obj.data.materials.append(mat)
 
         ## TODO:支持节点材质，BSDF颜色输入
@@ -143,159 +151,160 @@ def set_animation(obj, start=1, end=250):
             obj.keyframe_insert("rotation_euler", frame=frame)
             print(f"已为 {obj.name} 创建 {obj.animation_data.action.frame_range} 帧动画")
 
-##### 原始代码 #####
-# def setup_render(engine='CYCLES'):
-#     scene = bpy.context.scene
-#     scene.render.engine = engine
-#     scene.render.resolution_x = 960
-#     scene.render.resolution_y = 540
-#     scene.render.image_settings.file_format = 'OPEN_EXR'
-#     scene.render.image_settings.color_depth = '32'
-    
-#     # 启用通道
-#     vl = scene.view_layers[0]
-#     vl.use_pass_z = True                    # 深度通道
-#     vl.use_pass_object_index = True         # ID通道
-    
-#     # 引擎特定设置
-#     if engine == 'CYCLES':
-#         scene.cycles.samples = 16
-#         scene.cycles.use_denoising = True
-#     else:
-#         scene.eevee.taa_render_samples = 64
-
-# def render_cameras(cameras, frame_start=1, frame_end=20):
-#     original_camera = bpy.context.scene.camera
-#     scene = bpy.context.scene
-    
-#     # 设置渲染的帧范围
-#     scene.frame_start = frame_start
-#     scene.frame_end = frame_end
-    
-#     for cam in cameras:
-#         scene.camera = cam
-#         scene.render.filepath = f"//renders/{cam.name}/frame_"
-#         print(f"Rendering with camera: {cam.name}")
-#         bpy.ops.render.render(animation=True)
-    
-#     scene.camera = original_camera
-
 ### 优化后的代码 ###
 def setup_render(engine='CYCLES'):
     scene = bpy.context.scene
+    
+    # 基础渲染设置
     scene.render.engine = engine
     scene.render.resolution_x = 960
     scene.render.resolution_y = 540
-    scene.render.image_settings.file_format = 'OPEN_EXR'
+    scene.render.image_settings.file_format = 'OPEN_EXR_MULTILAYER'
     scene.render.image_settings.color_depth = '32'
     scene.render.use_motion_blur = False
     
+    # 视图层配置
     vl = scene.view_layers["ViewLayer"]
     
     # 启用基础通道
     vl.use_pass_combined = True       # RGB
-    vl.use_pass_z = True              # Z-depth（垂直距离）
-    vl.use_pass_object_index = True   # ID
+    vl.use_pass_z = True              # Z-depth（垂直平面距离）
+    # vl.use_pass_object_index = True   # ID：黑白
+    vl.use_pass_diffuse_color = True    # 彩色ID图，把diffuse color渲染作ID图
     
-    # 添加自定义AOV通道
-    def ensure_aov(layer, name, type='VALUE'):
-        if name not in layer.aovs:
-            aov = layer.aovs.add()
-            aov.name = name
-            aov.type = type
+    # 创建自定义AOV（Blender 4.2+语法）
+    def ensure_aov(layer, name):
+        if name not in [aov.name for aov in layer.aovs]:
+            new_aov = layer.aovs.add()
+            new_aov.name = name
+            new_aov.type = 'VALUE'
     
-    # 创建两个自定义AOV
-    ensure_aov(vl, 'CameraDistance')      # 摄像机距离
-    ensure_aov(vl, 'VerticalDistance')    # 垂直平面距离
+    # ensure_aov(vl, 'CameraDistance')    # 摄像机到像素的实际距离
+    # ensure_aov(vl, 'VerticalDistance')  # 垂直平面距离（备用）
     
-    # 配置节点系统
-    if not scene.node_tree:
-        scene.use_nodes = True
+    # 节点系统配置
+    scene.use_nodes = True
+    node_tree = scene.node_tree
+    node_tree.nodes.clear()
     
-    nodes = scene.node_tree.nodes
-    links = scene.node_tree.links
+    # 创建render layer节点
+    rl_node = node_tree.nodes.new('CompositorNodeRLayers')
+    rl_node.location = (400, 0)
+
+    # 创建file_output输出节点
+    output_node = node_tree.nodes.new('CompositorNodeOutputFile')
+    output_node.location = (1200, 0)
+
+    # 创建归一化的Depth节点
+    normalized_node_depth = node_tree.nodes.new('CompositorNodeNormalize')
+    normalized_node_depth.location = (700, -100)
+
+    # 创建ID到颜色节点
+    # id_to_color = node_tree.nodes.new('CompositorNodeValToRGB')
+    # id_to_color.location = (800, 200)
+    # id_to_color.color_ramp.interpolation = 'CONSTANT'
+
+    # global num
+    # for i in range(num + 1):
+    #     position = i / num
+    #     color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
+    #     if i == 0:
+    #         id_to_color.color_ramp.elements[0].position = position
+    #         id_to_color.color_ramp.elements[0].color = color
+    #     else:
+    #         element = id_to_color.color_ramp.elements.new(position)
+    #         element.color = color
+
+    # TODO: 修正输出路径,和下面的输出路径冲不冲突?
+    output_node.base_path = "//render/"
+    output_node.format.file_format = 'OPEN_EXR_MULTILAYER'
+    output_node.format.color_depth = '32'
+
+    output_node.file_slots.new(name="Object Index")
+    output_node.file_slots.new(name="Depth")
+    output_node.file_slots.new(name="VerticalDistance")
+    output_node.format.exr_codec = 'ZIP'
+    output_node.format.color_depth = '32'
+    bpy.context.scene.render.compositor_device = 'CPU'
     
-    # 清空现有节点
-    nodes.clear()
+    # 连接节点
+    links = node_tree.links
+    links.new(rl_node.outputs["Image"], output_node.inputs["Image"])        # RGB
+    links.new(rl_node.outputs["Depth"], normalized_node_depth.inputs["Value"])  # depth
+    links.new(normalized_node_depth.outputs["Value"], output_node.inputs["Depth"])
+
+    # links.new(rl_node.outputs["IndexOB"], id_to_color.inputs["Fac"])        # 黑白ID
+    # links.new(id_to_color.outputs["Image"], output_node.inputs["Object Index"])
+    links.new(rl_node.outputs["DiffCol"], output_node.inputs["Object Index"])  # 彩色ID
+
+    # # 动态连接自定义AOV
+    # custom_channels = ['CameraDistance', 'VerticalDistance']
+    # for idx, ch in enumerate(custom_channels, start=3):
+    #     if ch in rl_node.outputs:
+    #         links.new(rl_node.outputs[ch], output_node.inputs[idx])
     
-    # 创建必要节点
-    rl_node = nodes.new('CompositorNodeRLayers')
-    output_node = nodes.new('CompositorNodeComposite')
-    
-    # 连接所有通道
-    links.new(rl_node.outputs["Image"], output_node.inputs["Image"])
-    links.new(rl_node.outputs["Depth"], output_node.inputs["Depth"])
-    links.new(rl_node.outputs["CameraDistance"], output_node.inputs[2])  # EXR第4通道
-    links.new(rl_node.outputs["VerticalDistance"], output_node.inputs[3]) # EXR第5通道
-    
-    # 引擎特定设置
+    # 引擎特定配置
     if engine == 'CYCLES':
         scene.cycles.samples = 64
-        scene.cycles.use_denoise = True
+        scene.cycles.use_denoising = True
         
-        # 为所有物体创建距离计算材质
-        if not bpy.data.materials.get("DistanceMaterial"):
-            mat = bpy.data.materials.new("DistanceMaterial")
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-            nodes.clear()
+        # # 创建距离计算材质
+        # if not bpy.data.materials.get("AOV_Distance"):
+        #     mat = bpy.data.materials.new("AOV_Distance")
+        #     mat.use_nodes = True
+        #     nodes = mat.node_tree.nodes
+        #     nodes.clear()
             
-            # 创建节点网络
-            geo = nodes.new('ShaderNodeNewGeometry')
-            camera = nodes.new('ShaderNodeCameraData')
-            math_sub = nodes.new('ShaderNodeVectorMath')
-            math_sub.operation = 'SUBTRACT'
-            math_len = nodes.new('ShaderNodeVectorMath')
-            math_len.operation = 'LENGTH'
-            aov_out = nodes.new('ShaderNodeOutputAOV')
-            aov_out.name = 'CameraDistance'
+        #     # 节点网络
+        #     geometry = nodes.new('ShaderNodeNewGeometry')
+        #     camera = nodes.new('ShaderNodeCameraData')
+        #     math_sub = nodes.new('ShaderNodeVectorMath')
+        #     math_sub.operation = 'SUBTRACT'
+        #     math_length = nodes.new('ShaderNodeVectorMath')
+        #     math_length.operation = 'LENGTH'
+        #     aov_out = nodes.new('ShaderNodeOutputAOV')
+        #     aov_out.name = 'CameraDistance'
             
-            # 连接节点
-            links = mat.node_tree.links
-            links.new(camera.outputs["View Z"], math_sub.inputs[0])
-            links.new(geo.outputs["Position"], math_sub.inputs[1])
-            links.new(math_sub.outputs["Vector"], math_len.inputs[0])
-            links.new(math_len.outputs["Value"], aov_out.inputs["Value"])
+        #     # 连接节点
+        #     links = mat.node_tree.links
+        #     links.new(camera.outputs["View Z"], math_sub.inputs[0])
+        #     links.new(geometry.outputs["Position"], math_sub.inputs[1])
+        #     links.new(math_sub.outputs["Vector"], math_length.inputs[0])
+        #     links.new(math_length.outputs["Value"], aov_out.inputs["Value"])
             
         # 应用材质到所有物体
-        for obj in bpy.data.objects:
-            if obj.type == 'MESH':
-                if not obj.data.materials:
-                    obj.data.materials.append(bpy.data.materials["DistanceMaterial"])
+        # for obj in bpy.data.objects:
+        #     if obj.type == 'MESH' and not obj.data.materials:
+        #         obj.data.materials.append(bpy.data.materials["AOV_Distance"])
                 
-    else:  # EEVEE配置
-        scene.eevee.taa_render_samples = 64
-        # 启用必要通道
-        vl.use_pass_uv = True
-        vl.use_pass_vector = True
-        
-        # 设置距离映射
-        scene.eevee.use_ssr = True
-        scene.eevee.use_gtao = True
+    # else:  # EEVEE配置
+    #     scene.eevee.taa_render_samples = 64
+    #     scene.eevee.use_ssr = True
+    #     scene.eevee.use_gtao = True
+    #     vl.use_pass_mist = True  # 使用雾效近似距离
+    #     scene.world.mist_settings.start = 0
+    #     scene.world.mist_settings.depth = 25
 
-# 在渲染后添加元数据记录
-def render_cameras(cameras, frame_start=1, frame_end=20):
-    original_camera = bpy.context.scene.camera
+def render_cameras(cameras):
     scene = bpy.context.scene
-    
+    original_camera = scene.camera
+
     # 设置渲染的帧范围
-    scene.frame_start = frame_start
-    scene.frame_end = frame_end
+    scene.frame_start = 1
+    scene.frame_end = 1
     
+    # # 验证输出通道
+    # print("激活的AOV通道：")
+    # for aov in scene.view_layers["ViewLayer"].aovs:
+    #     print(f"- {aov.name} ({aov.type})")
+    
+    # 遍历摄像机渲染
     for cam in cameras:
         scene.camera = cam
         scene.render.filepath = f"//renders/{cam.name}/frame_"
         
-        # 写入摄像机参数元数据
-        exr_header = {
-            'CameraLocation': str(cam.location),
-            'CameraRotation': str(cam.rotation_euler),
-            'FocalLength': str(cam.data.lens)
-        }
-        scene.render.image_settings.exr_codec = 'ZIP'
-        scene.render.image_settings.use_zbuffer = True
-        
-        print(f"Rendering with camera: {cam.name}")
+        # 执行渲染
+        print(f"正在使用摄像机 {cam.name} 渲染...")
         bpy.ops.render.render(animation=True)
     
     scene.camera = original_camera
