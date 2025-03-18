@@ -7,8 +7,21 @@ from mathutils import Vector, Euler
 num = 8
 
 def clear_scene():
+    # Delete all objects
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete()
+
+    # Clear all data blocks
+    for data_block in (bpy.data.materials, bpy.data.meshes, bpy.data.lights, 
+                       bpy.data.cameras, bpy.data.textures, bpy.data.images, 
+                       bpy.data.collections, bpy.data.actions, bpy.data.particles, 
+                       bpy.data.worlds):
+        for item in data_block:
+            data_block.remove(item)
+
+    # Clear all nodes in the compositor
+    if bpy.context.scene.use_nodes:
+        bpy.context.scene.node_tree.nodes.clear()
 
 def setup_scene(size_x=5, size_y=5, size_z=4):
     primitives = ['primitive_cube_add', 'primitive_uv_sphere_add', 'primitive_cone_add', 'primitive_torus_add', 'primitive_monkey_add', 'primitive_cylinder_add']
@@ -169,7 +182,6 @@ def setup_render(engine='CYCLES'):
     # 启用基础通道
     vl.use_pass_combined = True       # RGB
     vl.use_pass_z = True              # Z-depth（垂直平面距离）
-    # vl.use_pass_object_index = True   # ID：黑白
     vl.use_pass_diffuse_color = True    # 彩色ID图，把diffuse color渲染作ID图
     
     # 创建自定义AOV（Blender 4.2+语法）
@@ -199,28 +211,11 @@ def setup_render(engine='CYCLES'):
     normalized_node_depth = node_tree.nodes.new('CompositorNodeNormalize')
     normalized_node_depth.location = (700, -100)
 
-    # 创建ID到颜色节点
-    # id_to_color = node_tree.nodes.new('CompositorNodeValToRGB')
-    # id_to_color.location = (800, 200)
-    # id_to_color.color_ramp.interpolation = 'CONSTANT'
-
-    # global num
-    # for i in range(num + 1):
-    #     position = i / num
-    #     color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
-    #     if i == 0:
-    #         id_to_color.color_ramp.elements[0].position = position
-    #         id_to_color.color_ramp.elements[0].color = color
-    #     else:
-    #         element = id_to_color.color_ramp.elements.new(position)
-    #         element.color = color
-
     # TODO: 修正输出路径,和下面的输出路径冲不冲突?
     output_node.base_path = "//render/"
     output_node.format.file_format = 'OPEN_EXR_MULTILAYER'
     output_node.format.color_depth = '32'
 
-    output_node.file_slots.new(name="Object Index")
     output_node.file_slots.new(name="Depth")
     output_node.file_slots.new(name="VerticalDistance")
     output_node.format.exr_codec = 'ZIP'
@@ -233,8 +228,6 @@ def setup_render(engine='CYCLES'):
     links.new(rl_node.outputs["Depth"], normalized_node_depth.inputs["Value"])  # depth
     links.new(normalized_node_depth.outputs["Value"], output_node.inputs["Depth"])
 
-    # links.new(rl_node.outputs["IndexOB"], id_to_color.inputs["Fac"])        # 黑白ID
-    # links.new(id_to_color.outputs["Image"], output_node.inputs["Object Index"])
     links.new(rl_node.outputs["DiffCol"], output_node.inputs["Object Index"])  # 彩色ID
 
     # # 动态连接自定义AOV
@@ -276,7 +269,7 @@ def setup_render(engine='CYCLES'):
         # for obj in bpy.data.objects:
         #     if obj.type == 'MESH' and not obj.data.materials:
         #         obj.data.materials.append(bpy.data.materials["AOV_Distance"])
-                
+
     # else:  # EEVEE配置
     #     scene.eevee.taa_render_samples = 64
     #     scene.eevee.use_ssr = True
@@ -327,6 +320,6 @@ for cam in cameras:
 setup_render(engine='CYCLES')  # 切换为'BLENDER_EEVEE'使用EEVEE
 
 # 开始渲染
-render_cameras(cameras)
+# render_cameras(cameras)
 
 print("所有渲染任务完成！")
