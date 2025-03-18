@@ -43,14 +43,6 @@ def setup_scene(size_x=5, size_y=5, size_z=4):
             mat.diffuse_color = (random.random(), random.random(), random.random(), 1)  # 随机颜色
         obj.data.materials.append(mat)
 
-        ## TODO:支持节点材质，BSDF颜色输入
-        # mat = bpy.data.materials.new(name=f"Material_{_}")
-        # mat.use_nodes = True
-        # bsdf = mat.node_tree.nodes.get("Principled BSDF")
-        # if bsdf:
-        #     bsdf.inputs["Base Color"].default_value = (random.random(), random.random(), random.random(), 1)  # 随机颜色
-        # obj.data.materials.append(mat)
-
     # 添加太阳光
     bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
     light = bpy.context.object
@@ -89,13 +81,7 @@ def add_cameras(num=4, radius=15, height=8, fov=60):
         # 设置摄像机的FOV
         cam.data.lens_unit = 'FOV'
         cam.data.angle = math.radians(fov)
-        
-        # # 启用运动路径显示
-        # cam.display_type = 'WIRE'
-        # cam.show_in_front = True
 
-        # # 添加路径动画标记
-        # bpy.ops.object.paths_calculate(start_frame=scene.frame_start, end_frame=scene.frame_end)
 
         cameras.append(cam)
     return cameras
@@ -184,7 +170,7 @@ def setup_render(engine='CYCLES'):
     vl.use_pass_z = True              # Z-depth（垂直平面距离）
     vl.use_pass_diffuse_color = True    # 彩色ID图，把diffuse color渲染作ID图
     
-    # 创建自定义AOV（Blender 4.2+语法）
+    # 创建自定义AOV
     def ensure_aov(layer, name):
         if name not in [aov.name for aov in layer.aovs]:
             new_aov = layer.aovs.add()
@@ -205,7 +191,7 @@ def setup_render(engine='CYCLES'):
 
     # 创建file_output输出节点
     output_node = node_tree.nodes.new('CompositorNodeOutputFile')
-    output_node.location = (1200, 0)
+    output_node.location = (900, 0)
 
     # 创建归一化的Depth节点
     normalized_node_depth = node_tree.nodes.new('CompositorNodeNormalize')
@@ -218,6 +204,8 @@ def setup_render(engine='CYCLES'):
 
     output_node.file_slots.new(name="Depth")
     output_node.file_slots.new(name="VerticalDistance")
+    output_node.file_slots.new(name="Object Index")
+
     output_node.format.exr_codec = 'ZIP'
     output_node.format.color_depth = '32'
     bpy.context.scene.render.compositor_device = 'CPU'
@@ -270,13 +258,12 @@ def setup_render(engine='CYCLES'):
         #     if obj.type == 'MESH' and not obj.data.materials:
         #         obj.data.materials.append(bpy.data.materials["AOV_Distance"])
 
-    # else:  # EEVEE配置
-    #     scene.eevee.taa_render_samples = 64
-    #     scene.eevee.use_ssr = True
-    #     scene.eevee.use_gtao = True
-    #     vl.use_pass_mist = True  # 使用雾效近似距离
-    #     scene.world.mist_settings.start = 0
-    #     scene.world.mist_settings.depth = 25
+    else:  # EEVEE配置
+        scene.eevee.taa_render_samples = 64
+        scene.eevee.use_ssr = True
+        scene.eevee.use_gtao = True
+        vl.use_pass_mist = True  # 使用雾效近似距离
+    
 
 def render_cameras(cameras):
     scene = bpy.context.scene
@@ -284,7 +271,7 @@ def render_cameras(cameras):
 
     # 设置渲染的帧范围
     scene.frame_start = 1
-    scene.frame_end = 1
+    scene.frame_end = 4
     
     # # 验证输出通道
     # print("激活的AOV通道：")
@@ -317,9 +304,10 @@ for cam in cameras:
     set_animation(cam)
 
 # 渲染设置
-setup_render(engine='CYCLES')  # 切换为'BLENDER_EEVEE'使用EEVEE
+setup_render(engine='BLENDER_EEVEE_NEXT')  # 切换为'BLENDER_EEVEE'使用EEVEE
+# setup_render(engine='CYCLES')
 
 # 开始渲染
-# render_cameras(cameras)
+render_cameras(cameras)
 
 print("所有渲染任务完成！")
