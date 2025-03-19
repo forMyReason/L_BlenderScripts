@@ -2,11 +2,12 @@ import bpy
 import math
 import random
 from mathutils import Vector, Euler
+import os
 
 # 共生成多少个物体
 num = 8
 output_base_path = r"C:/Users/79160/Desktop/L_BlenderPlugin_1/renders/"
-engine_type = 'BLENDER_EEVEE_NEXT'  # 'BLENDER_EEVEE' or 'CYCLES'
+engine_type = 'BLENDER_EEVEE_NEXT'  # 'BLENDER_EEVEE_NEXT' or 'CYCLES'
 
 def clear_scene():
     # Delete all objects
@@ -164,7 +165,7 @@ def setup_render(engine='CYCLES'):
     
     # Frame Range
     scene.frame_start = 1
-    scene.frame_end = 4
+    scene.frame_end = 2
     scene.frame_step = 1
 
     # Output Settings
@@ -181,9 +182,23 @@ def setup_render(engine='CYCLES'):
     scene.render.use_compositing = True
     scene.render.dither_intensity = 1.0
 
-    
+
     # 视图层配置
     vl = scene.view_layers["ViewLayer"]
+
+    # Disable all unnecessary passes
+    passes_to_disable = [
+        "use_pass_combined", "use_pass_z", "use_pass_diffuse_color", 
+        "use_pass_mist", "use_pass_normal", "use_pass_shadow", 
+        "use_pass_ambient_occlusion", "use_pass_emit", "use_pass_environment", 
+        "use_pass_diffuse_direct", "use_pass_diffuse_indirect", 
+        "use_pass_glossy_direct", "use_pass_glossy_indirect", 
+        "use_pass_transmission_direct", "use_pass_transmission_indirect", 
+        "use_pass_subsurface_direct", "use_pass_subsurface_indirect"
+    ]
+    
+    for pass_name in passes_to_disable:
+        setattr(vl, pass_name, False)
     
     # 启用基础通道
     vl.use_pass_combined = True         # RGB
@@ -212,7 +227,15 @@ def setup_render(engine='CYCLES'):
 
     # 创建file_output输出节点
     output_node = node_tree.nodes.new('CompositorNodeOutputFile')           # file output 渲染设置继承全局设置，其中输出路径在渲染部分动态更新
+    output_node.name = "FileOutputNode"
     output_node.location = (900, 0)
+
+    output_node.format.file_format = 'OPEN_EXR_MULTILAYER'  # 显式设置格式
+    output_node.format.color_depth = '32'
+    output_node.format.exr_codec = 'ZIP'
+
+    output_node.file_slots.clear()
+    output_node.file_slots.new(name="RGB")
     output_node.file_slots.new(name="Depth")
     output_node.file_slots.new(name="Object Index")
     output_node.file_slots.new(name="VerticalDistance")
@@ -224,7 +247,7 @@ def setup_render(engine='CYCLES'):
 
     # 连接节点
     links = node_tree.links
-    links.new(rl_node.outputs["Image"], output_node.inputs["Image"])
+    links.new(rl_node.outputs["Image"], output_node.inputs["RGB"])
     links.new(rl_node.outputs["Depth"], normalized_node_depth.inputs["Value"])
     links.new(normalized_node_depth.outputs["Value"], output_node.inputs["Depth"])
     links.new(rl_node.outputs["DiffCol"], output_node.inputs["Object Index"])
@@ -293,16 +316,22 @@ def render_cameras(cameras):
     global output_base_path
     for cam in cameras:
         scene.camera = cam
-        current_render_path = f"{output_base_path}/{cam.name}"
-        os.makedirs(f"{current_render_path}", exist_ok=True)
-        bpy.data.scenes["Scene"].node_tree.nodes["File Output"].base_path = current_render_path
+        camera_folder = os.path.join(output_base_path, cam.name)
+        current_camera_path = camera_folder + "/" + cam.name + "_"
+        os.makedirs(camera_folder, exist_ok=True)
+
+        # 动态设置输出路径
+        file_output_node = scene.node_tree.nodes.get("FileOutputNode")
+        file_output_node.base_path = current_camera_path
+
         bpy.ops.render.render(animation=True)
-        print(f"正在使用摄像机 {cam.name} 渲染...")
-    
+        print(f"正在使用摄像机 {cam.name} 渲染到路径: {current_camera_path}")
+
     scene.camera = original_camera
 
-# 打开控制台输出
-bpy.ops.wm.console_toggle()
+# 判断控制台是否已经打开，如果未打开则打开
+if not bpy.app.debug_value:  # debug_value为0时表示控制台未打开
+    bpy.ops.wm.console_toggle()
 
 # 执行主程序
 clear_scene()
@@ -322,7 +351,6 @@ for cam in cameras:
 setup_render(engine = engine_type )
 
 # 开始渲染
-# render_cameras(cameras)
+render_cameras(cameras)
 
 print("所有渲染任务完成！")
-bpy.ops.wm.console_toggle()
