@@ -7,7 +7,7 @@ import os
 # 共生成多少个物体
 num = 8
 output_base_path = r"C:/Users/79160/Desktop/L_BlenderPlugin_1/renders/"
-engine_type = 'BLENDER_EEVEE_NEXT'  # 'BLENDER_EEVEE_NEXT' or 'CYCLES'
+engine_type = 'CYCLES'  # 'BLENDER_EEVEE_NEXT' or 'CYCLES'
 
 def clear_scene():
     # Delete all objects
@@ -76,6 +76,9 @@ def add_cameras(num=4, radius=15, height=8, fov=60):
         bpy.ops.object.camera_add(location=(x, y, height))
         cam = bpy.context.object
         cam.rotation_mode = 'XYZ'
+
+        # 设置摄像机远裁剪面
+        cam.data.clip_end = 50
         
         # 让摄像机看向原点
         direction = cam.location - Vector((0, 0, 0))
@@ -241,13 +244,18 @@ def setup_render(engine='CYCLES'):
         slot = output_node.file_slots.new(name)
         links.new(rl_node.outputs[socket], output_node.inputs[name])
 
-    # 深度通道归一化（仅Cycles需要）
-    if engine == 'CYCLES':
-        normalize = node_tree.nodes.new('CompositorNodeNormalize')
-        normalize.location = (700, -100)
-        normalize.label = 'Normalize Depth'
-        links.new(rl_node.outputs['Depth'], normalize.inputs[0])
-        links.new(normalize.outputs[0], output_node.inputs['Depth'])
+    # TODO:深度通道归一化（仅Cycles需要）
+    normalize = node_tree.nodes.new('CompositorNodeNormalize')
+    normalize.location = (700, -300)
+    normalize.label = 'Normalize Depth'
+    links.new(rl_node.outputs['Depth'], normalize.inputs[0])
+    links.new(normalize.outputs[0], output_node.inputs['Depth'])
+
+    normalize_cam = node_tree.nodes.new('CompositorNodeNormalize')
+    normalize_cam.location = (700, -100)
+    normalize.label = 'normalize_cam'
+    links.new(rl_node.outputs['CameraDistance'], normalize_cam.inputs[0])
+    links.new(normalize_cam.outputs[0], output_node.inputs['CameraDistance'])
     
     # 引擎特定配置
     if engine == 'CYCLES':
@@ -263,52 +271,38 @@ def setup_render(engine='CYCLES'):
             aov.type = 'VALUE'
         
         # 创建距离计算材质
-        if not bpy.data.materials.get("AOV_Distance"):
-            mat = bpy.data.materials.new("AOV_Distance")
-            mat.use_nodes = True
-            nodes = mat.node_tree.nodes
-            nodes.clear()
+            if not bpy.data.materials.get("AOV_Distance"):
+                mat = bpy.data.materials.new("AOV_Distance")
+                mat.use_nodes = True
+                nodes = mat.node_tree.nodes
+                nodes.clear()
 
-            # 节点网络
-            geometry = nodes.new('ShaderNodeNewGeometry')
-            camera = nodes.new('ShaderNodeCameraData')
-            math_sub = nodes.new('ShaderNodeVectorMath')
-            math_sub.operation = 'SUBTRACT'
-            math_length = nodes.new('ShaderNodeVectorMath')
-            math_length.operation = 'LENGTH'
-            aov_out = nodes.new('ShaderNodeOutputAOV')
-            aov_out.name = 'CameraDistance'
-            
-            # 连接节点
-            links = mat.node_tree.links
-            links.new(camera.outputs["View Vector"], math_sub.inputs[0])
-            links.new(geometry.outputs["Position"], math_sub.inputs[1])
-            links.new(math_sub.outputs["Vector"], math_length.inputs[0])
-            links.new(math_length.outputs["Value"], aov_out.inputs["Value"])
+                geometry = nodes.new('ShaderNodeNewGeometry')
+                math_length = nodes.new('ShaderNodeVectorMath')
+                math_length.operation = 'LENGTH'
+                aov_out = nodes.new('ShaderNodeOutputAOV')
+                aov_out.name = 'CameraDistance'
+                
+                # 透明材质避免影响主渲染
+                transparent = nodes.new('ShaderNodeBsdfTransparent')
+                output = nodes.new('ShaderNodeOutputMaterial')
+                
+                links = mat.node_tree.links
+                links.new(geometry.outputs["Camera Position"], math_length.inputs[0])
+                links.new(math_length.outputs["Value"], aov_out.inputs["Value"])
+                links.new(transparent.outputs["BSDF"], output.inputs["Surface"])
 
-            # 确保材质输出连接到表面输出
-            output_node = nodes.new('ShaderNodeOutputMaterial')
-            emission_node = nodes.new('ShaderNodeEmission')
-            links.new(math_length.outputs["Value"], emission_node.inputs["Strength"])
-            links.new(emission_node.outputs["Emission"], output_node.inputs["Surface"])
-            
-        # 应用材质到所有物体
-        for obj in bpy.data.objects:
-            if obj.type == 'MESH' and not obj.data.materials:
-                obj.data.materials.append(bpy.data.materials["AOV_Distance"])
+                # 应用材质到所有物体
+                for obj in bpy.data.objects:
+                    if obj.type == 'MESH':
+                        obj.data.materials.append(bpy.data.materials["AOV_Distance"])
 
-
-        for obj in bpy.data.objects:
-            if obj.type == 'MESH':
-                # 清空原有材质并添加 AOV 材质
-                obj.data.materials.clear()
-                obj.data.materials.append(bpy.data.materials["AOV_Distance"])
 
     else:  # EEVEE配置
         scene.eevee.taa_render_samples = 64
         scene.eevee.use_ssr = True
         scene.eevee.use_gtao = True
-        vl.use_pass_mist = True  # 使用雾效近似距离
+        vl.use_pass_mist = True
         if not scene.world:
             scene.world = bpy.data.worlds.new(name="World")
         if hasattr(scene.world, "mist_settings"):
@@ -316,7 +310,7 @@ def setup_render(engine='CYCLES'):
             scene.world.mist_settings.start = 0.1  # 雾效起始距离
             scene.world.mist_settings.depth = 5.0  # 雾效深度
             scene.world.mist_settings.falloff = 'LINEAR'  # 雾效衰减类型，可选 'LINEAR', 'QUADRATIC', 'INVERSE_QUADRATIC'
-    
+
 def render_cameras(cameras):
     scene = bpy.context.scene
     original_camera = scene.camera
