@@ -177,11 +177,12 @@ def setup_render(engine='CYCLES'):
             new_aov.name = name
             new_aov.type = 'VALUE'
     
-    # ensure_aov(vl, 'CameraDistance')    # 摄像机到像素的实际距离
-    # ensure_aov(vl, 'VerticalDistance')  # 垂直平面距离（备用）
+    ensure_aov(vl, 'CameraDistance')    # 摄像机到像素的实际距离
+    ensure_aov(vl, 'VerticalDistance')  # 垂直平面距离（备用）
     
     # 节点系统配置
-    scene.use_nodes = True
+    if not scene.node_tree:
+        scene.use_nodes = True
     node_tree = scene.node_tree
     node_tree.nodes.clear()
     
@@ -208,7 +209,6 @@ def setup_render(engine='CYCLES'):
 
     output_node.format.exr_codec = 'ZIP'
     output_node.format.color_depth = '32'
-    bpy.context.scene.render.compositor_device = 'CPU'
     
     # 连接节点
     links = node_tree.links
@@ -218,45 +218,50 @@ def setup_render(engine='CYCLES'):
 
     links.new(rl_node.outputs["DiffCol"], output_node.inputs["Object Index"])  # 彩色ID
 
-    # # 动态连接自定义AOV
-    # custom_channels = ['CameraDistance', 'VerticalDistance']
-    # for idx, ch in enumerate(custom_channels, start=3):
-    #     if ch in rl_node.outputs:
-    #         links.new(rl_node.outputs[ch], output_node.inputs[idx])
+    # 动态连接自定义AOV
+    custom_channels = ['CameraDistance', 'VerticalDistance']
+    for ch in custom_channels:
+        if ch in rl_node.outputs:
+            # Ensure the file slot exists for the custom AOV
+            if ch not in [slot.name for slot in output_node.file_slots]:
+                output_node.file_slots.new(name=ch)
+            # Connect the AOV output to the corresponding file slot
+            links.new(rl_node.outputs[ch], output_node.inputs[ch])
     
     # 引擎特定配置
     if engine == 'CYCLES':
         scene.cycles.samples = 64
         scene.cycles.use_denoising = True
+        scene.cycles.device = 'CPU'         # 全局设置CPU渲染，只有cycles分CPU和GPU
         
-        # # 创建距离计算材质
-        # if not bpy.data.materials.get("AOV_Distance"):
-        #     mat = bpy.data.materials.new("AOV_Distance")
-        #     mat.use_nodes = True
-        #     nodes = mat.node_tree.nodes
-        #     nodes.clear()
+        # 创建距离计算材质
+        if not bpy.data.materials.get("AOV_Distance"):
+            mat = bpy.data.materials.new("AOV_Distance")
+            mat.use_nodes = True
+            nodes = mat.node_tree.nodes
+            nodes.clear()
             
-        #     # 节点网络
-        #     geometry = nodes.new('ShaderNodeNewGeometry')
-        #     camera = nodes.new('ShaderNodeCameraData')
-        #     math_sub = nodes.new('ShaderNodeVectorMath')
-        #     math_sub.operation = 'SUBTRACT'
-        #     math_length = nodes.new('ShaderNodeVectorMath')
-        #     math_length.operation = 'LENGTH'
-        #     aov_out = nodes.new('ShaderNodeOutputAOV')
-        #     aov_out.name = 'CameraDistance'
+            # 节点网络
+            geometry = nodes.new('ShaderNodeNewGeometry')
+            camera = nodes.new('ShaderNodeCameraData')
+            math_sub = nodes.new('ShaderNodeVectorMath')
+            math_sub.operation = 'SUBTRACT'
+            math_length = nodes.new('ShaderNodeVectorMath')
+            math_length.operation = 'LENGTH'
+            aov_out = nodes.new('ShaderNodeOutputAOV')
+            aov_out.name = 'CameraDistance'
             
-        #     # 连接节点
-        #     links = mat.node_tree.links
-        #     links.new(camera.outputs["View Z"], math_sub.inputs[0])
-        #     links.new(geometry.outputs["Position"], math_sub.inputs[1])
-        #     links.new(math_sub.outputs["Vector"], math_length.inputs[0])
-        #     links.new(math_length.outputs["Value"], aov_out.inputs["Value"])
+            # 连接节点
+            links = mat.node_tree.links
+            links.new(camera.outputs["View Z"], math_sub.inputs[0])
+            links.new(geometry.outputs["Position"], math_sub.inputs[1])
+            links.new(math_sub.outputs["Vector"], math_length.inputs[0])
+            links.new(math_length.outputs["Value"], aov_out.inputs["Value"])
             
         # 应用材质到所有物体
-        # for obj in bpy.data.objects:
-        #     if obj.type == 'MESH' and not obj.data.materials:
-        #         obj.data.materials.append(bpy.data.materials["AOV_Distance"])
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH' and not obj.data.materials:
+                obj.data.materials.append(bpy.data.materials["AOV_Distance"])
 
     else:  # EEVEE配置
         scene.eevee.taa_render_samples = 64
@@ -281,13 +286,16 @@ def render_cameras(cameras):
     # 遍历摄像机渲染
     for cam in cameras:
         scene.camera = cam
-        scene.render.filepath = f"//renders/{cam.name}/frame_"
+        scene.render.filepath = f"//render/{cam.name}/frame_"
         
         # 执行渲染
         print(f"正在使用摄像机 {cam.name} 渲染...")
         bpy.ops.render.render(animation=True)
     
     scene.camera = original_camera
+
+# 打开控制台输出
+bpy.ops.wm.console_toggle()
 
 # 执行主程序
 clear_scene()
@@ -308,6 +316,6 @@ setup_render(engine='BLENDER_EEVEE_NEXT')  # 切换为'BLENDER_EEVEE'使用EEVEE
 # setup_render(engine='CYCLES')
 
 # 开始渲染
-render_cameras(cameras)
+# render_cameras(cameras)
 
 print("所有渲染任务完成！")
